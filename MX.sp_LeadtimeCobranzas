@@ -1,0 +1,48 @@
+USE [Tableros]
+GO
+/****** Object:  StoredProcedure [dwdmx].[sp_LeadtimeCobranzas]    Script Date: 11/7/2025 20:19:12 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dwdmx].[sp_LeadtimeCobranzas]
+--WITH ENCRYPTION
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    IF OBJECT_ID('dwdmx.LeadtimeCobranzas', 'U') IS NOT NULL
+        DROP TABLE dwdmx.LeadtimeCobranzas;
+
+    CREATE TABLE dwdmx.LeadtimeCobranzas (
+        PVNumero NVARCHAR(50),
+        FechaVenta DATETIME,
+        FechaUltimoCobro DATETIME,
+        importe DECIMAL(18,2),
+        TotalCobrado DECIMAL(18,2),
+        LeadtimeCobro INT
+    );
+
+    ;WITH CobrosPorVenta AS (
+        SELECT 
+            preventa,
+            SUM(ISNULL(Importe, 0)) AS TotalCobrado,
+            MAX(Fecha) AS FechaUltimoCobro
+        FROM dwdmx.Cobranzas
+        GROUP BY preventa
+    )
+    INSERT INTO dwdmx.LeadtimeCobranzas (
+        PVNumero, FechaVenta, FechaUltimoCobro, importe, TotalCobrado, LeadtimeCobro
+    )
+    SELECT 
+        v.PVNumero,
+        v.Fecha AS FechaVenta,
+        c.FechaUltimoCobro,
+        CAST(v.importe * 1000 AS DECIMAL(18,2)) AS importe,
+        c.TotalCobrado,
+        DATEDIFF(DAY, v.Fecha, c.FechaUltimoCobro) AS LeadtimeCobro
+    FROM dwdmx.Ventas v
+    INNER JOIN CobrosPorVenta c ON v.PVNumero = c.preventa
+    WHERE ISNULL(c.TotalCobrado, 0) >= ISNULL(v.importe * 100, 0);
+END;
