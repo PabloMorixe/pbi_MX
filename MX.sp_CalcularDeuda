@@ -1,0 +1,79 @@
+USE [Tableros]
+GO
+/****** Object:  StoredProcedure [dwdmx].[sp_CalcularDeuda]    Script Date: 11/7/2025 20:17:50 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dwdmx].[sp_CalcularDeuda]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- 1) Si ya existe, la borramos
+    IF OBJECT_ID('dwdmx.Deuda','U') IS NOT NULL
+        DROP TABLE dwdmx.Deuda;
+
+    -- 2) Creamos la tabla destino
+    CREATE TABLE dwdmx.Deuda (
+        ID                INT IDENTITY(1,1) PRIMARY KEY,
+        PVNumero          NVARCHAR(50),
+        Fecha             DATETIME,
+        mesaño            AS CONCAT(
+                             YEAR(Fecha), '-',
+                             RIGHT('0'+CONVERT(VARCHAR(2),MONTH(Fecha)),2)
+                           ) PERSISTED,
+        ClienteNombre     NVARCHAR(100),
+        sucursalNombre    NVARCHAR(100),
+        fcNumero          VARCHAR(30),
+        importe           DECIMAL(18,2),
+        modelo            VARCHAR(100),
+        TotalCobrado      DECIMAL(18,2),
+        DeudaPendiente    DECIMAL(18,2),
+        cantDiasDeuda     INT,
+        FechaCarga        DATETIME       DEFAULT GETDATE()
+    );
+
+    -- 3) CTEs para última sucursal y totales de cobranza
+    ;WITH UltimaSucursal AS (
+        SELECT
+          preventa,
+          sucursalNombre,
+          ROW_NUMBER() 
+            OVER (PARTITION BY preventa ORDER BY Fecha DESC) AS rn
+        FROM dwdmx.Cobranzas
+        WHERE sucursalNombre IS NOT NULL
+    ),
+    CobrosAgrupados AS (
+        SELECT
+          preventa,
+          SUM(ISNULL(Importe,0)) AS TotalCobrado
+        FROM dwdmx.Cobranzas
+        GROUP BY preventa
+    )
+
+    -- 4) Insertamos en Deuda
+    INSERT INTO dwdmx.Deuda (
+      PVNumero, Fecha, ClienteNombre, sucursalNombre,
+      fcNumero, importe, modelo,
+      TotalCobrado, DeudaPendiente, cantDiasDeuda
+    )
+    SELECT
+      V.PVNumero,
+      V.Fecha,
+      V.ClienteNombre,
+      ISNULL(US.sucursalNombre,'SIN COBRANZAS'),
+      V.fcNumero,
+      V.importe,                                    -- ya viene en DECIMAL(18,2)
+      V.modelo,
+      ISNULL(CA.TotalCobrado,0),
+      V.importe - ISNULL(CA.TotalCobrado,0),
+      DATEDIFF(DAY, V.Fecha, GETDATE())
+    FROM dwdmx.Ventas V
+    LEFT JOIN CobrosAgrupados CA
+      ON V.PVNumero = CA.preventa
+    LEFT JOIN UltimaSucursal US
+      ON V.PVNumero = US.preventa
+     AND US.rn = 1;
+END;
