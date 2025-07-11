@@ -1,0 +1,283 @@
+USE [Tableros]
+GO
+/****** Object:  StoredProcedure [dwdmx].[sp_Generar_Stock]    Script Date: 11/7/2025 19:47:09 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dwdmx].[sp_Generar_Stock]
+--WITH ENCRYPTION
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+	--INGESTA
+					DECLARE @SQL NVARCHAR(MAX);
+						DECLARE @TableDefinition NVARCHAR(MAX) = N'(
+							Col1 VARCHAR(MAX), 
+							Col2 VARCHAR(MAX),
+							Col3 VARCHAR(MAX),
+							Col4 VARCHAR(MAX),
+							Col5 VARCHAR(MAX),
+							Col6 VARCHAR(MAX),
+							Col7 VARCHAR(MAX),
+							Col8 VARCHAR(MAX),
+							Col9 VARCHAR(MAX),
+							Col10 VARCHAR(MAX),
+							Col11 VARCHAR(MAX),
+							Col12 VARCHAR(MAX),
+							Col13 VARCHAR(MAX),
+							Col14 VARCHAR(MAX),
+							Col15 VARCHAR(MAX),
+							Col16 VARCHAR(MAX),
+							Col17 VARCHAR(MAX),
+							Col18 VARCHAR(MAX),
+							Col19 VARCHAR(MAX),
+							Col20 VARCHAR(MAX),
+							Col21 VARCHAR(MAX)
+						)';
+
+
+
+						BEGIN TRY
+							-- Elimina la tabla si ya existe
+							IF OBJECT_ID('sta.mx_stock', 'U') IS NOT NULL
+								DROP TABLE sta.mx_stock;
+
+							SET @SQL = N'
+							CREATE TABLE [sta].[mx_stock] ' + @TableDefinition + ';
+
+							BULK INSERT [sta].[mx_stock]
+							FROM ''C:\temp\Mexico\Input-Reportes\1-Stock.csv''
+							WITH (
+								FIELDTERMINATOR = ''|'',
+								ROWTERMINATOR = ''\n'',
+								FIRSTROW = 10,
+								CODEPAGE = ''ACP''
+							);
+
+							SELECT * FROM [sta].[mx_stock];';
+
+							EXEC sp_executesql @SQL;
+						END TRY
+						BEGIN CATCH
+							PRINT 'Error: ' + ERROR_MESSAGE();
+						END CATCH;
+
+
+					--	select * from sta.mx_stock where col11 = '001365'
+-------------------------------------------------
+--TRANSFORMACION 
+-------------------------------------------------
+										IF OBJECT_ID('DWDmx.[ConsultaStockFisico]', 'U') IS NOT NULL
+						DROP TABLE DWDmx.[ConsultaStockFisico];
+
+					CREATE TABLE DWDmx.[ConsultaStockFisico] (
+						ID INT IDENTITY(1,1) PRIMARY KEY,
+						Origen VARCHAR(100) NULL,
+						Modelo VARCHAR(100) NULL,
+						CodModelo VARCHAR(100),
+						ModeloAnio VARCHAR(4) NULL,
+						DescripcionOperativa VARCHAR(300) NULL,
+						Estado VARCHAR(100) NULL,
+						Uicacion VARCHAR(300) NULL,
+						Color VARCHAR(100) NULL,
+						Valor DECIMAL(18,2) NULL,
+						referencia VARCHAR(100),
+						nInventario  varchar(10),
+						FechaCarga DATETIME DEFAULT GETDATE()
+					);
+
+
+
+
+
+
+										INSERT INTO DWDmx.[ConsultaStockFisico] (
+								Origen,
+								Modelo,
+								CodModelo,
+								ModeloAnio,
+								DescripcionOperativa,
+								Estado,
+								Uicacion,
+								Color,
+								Valor,
+								referencia,
+								nInventario,
+								FechaCarga
+							)
+							SELECT
+								col1,
+								CASE 
+										WHEN col14 IS NOT NULL
+										 AND col5 LIKE CONCAT('%', col14, '%')
+										THEN
+											LTRIM(RTRIM(
+												SUBSTRING(
+													col5,
+													CASE 
+														WHEN col1 IN ('APRILIA','MOTO GUZZI','PIAGGIO','VESPA') THEN 1 
+														ELSE 6 
+													END,
+													CHARINDEX(col14, col5)
+													  - CASE 
+															WHEN col1 IN ('APRILIA','MOTO GUZZI','PIAGGIO','VESPA') THEN 1 
+															ELSE 6 
+														END
+												)
+											))
+										ELSE
+											col4
+									END AS Modelo,
+																	col4,
+								CASE 
+    WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO') 
+         AND CHARINDEX('MY''', col5) > 0 
+    THEN 
+        '20' + SUBSTRING(col5, CHARINDEX('MY''', col5) + 3, 2)
+
+    WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO') 
+         AND CHARINDEX('MY', col5) > 0 
+    THEN 
+        '20' + SUBSTRING(col5, CHARINDEX('MY', col5) + 2, 2)
+
+    WHEN col1 = 'VESPA' 
+         AND CHARINDEX('MY''', col5) > 0 
+    THEN 
+        '20' + SUBSTRING(col5, CHARINDEX('MY''', col5) + 3, 2)
+
+    WHEN col1 = 'VESPA' 
+         AND CHARINDEX('MY', col5) > 0 
+    THEN 
+        '20' + SUBSTRING(col5, CHARINDEX('MY', col5) + 2, 2)
+
+    WHEN col1 = 'VESPA' 
+         AND CHARINDEX('LATAM', col5) > 0 
+    THEN 
+        '20' + SUBSTRING(col5, CHARINDEX('LATAM', col5) + 6, 2)
+
+    WHEN col1 NOT IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO', 'VESPA') 
+    THEN 
+        LEFT(col5, 4)
+
+    ELSE 
+        NULL
+END AS ModeloAnio
+,
+
+
+
+								col5,
+								col8,
+								col10,
+								REPLACE(
+									REPLACE(
+										LTRIM(RTRIM(col14)),
+										' US', ''
+									),
+									CASE 
+										WHEN LEFT(col14, 8) IN ('LatAm 22', 'LatAm 23', 'LatAm 24', 'LatAm 25', 'LatAm 26') 
+											THEN LEFT(col14, 8) + ' '
+										ELSE ''
+									END,
+									''
+								) AS Color,
+      TRY_CAST(REPLACE(Col20, ',', '.') AS DECIMAL(18,2))          AS Importe1,
+								col19,
+								col11, 
+								GETDATE()
+							FROM sta.mx_stock
+							WHERE
+							--col14 IS NOT NULL 
+							-- col5 LIKE CONCAT('%', col14, '%')
+							  col19 is null
+							and
+							 col8 <> 'DEMO'
+
+
+--select * from DWDmx.[ConsultaStockFisico] 
+
+-------------------------------------------------------------------------------------------------------
+--GENERAR INVENTARIO
+
+	IF OBJECT_ID('DWDmx.[Inventario]', 'U') IS NOT NULL
+						DROP TABLE DWDmx.Inventario;
+
+					CREATE TABLE DWDmx.Inventario (
+						ID INT IDENTITY(1,1) PRIMARY KEY,
+							Origen VARCHAR(100) NULL,
+						Modelo VARCHAR(100) NULL,
+												CodModelo VARCHAR(100),
+
+						ModeloAnio VARCHAR(4) NULL,
+						DescripcionOperativa VARCHAR(300) NULL,
+						Estado VARCHAR(100) NULL,
+						Uicacion VARCHAR(300) NULL,
+						Color VARCHAR(100) NULL,
+						Valor DECIMAL(18,2) NULL,
+						referencia VARCHAR(100),
+						nInventario  varchar(10),
+						FechaCarga DATETIME DEFAULT GETDATE()
+					);
+  
+  
+			INSERT INTO DWDmx.Inventario (
+							Origen,
+							Modelo,
+							CodModelo, 
+							ModeloAnio,
+							DescripcionOperativa,
+							Estado,
+							Uicacion,
+							Color,
+							Valor,
+							referencia,
+							nInventario,
+							FechaCarga
+						)
+						SELECT
+							col1,
+							CASE 
+								WHEN col14 IS NOT NULL AND col5 LIKE CONCAT('%', col14, '%') THEN 
+									LTRIM(RTRIM(SUBSTRING(col5, 
+										CASE WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO', 'VESPA') THEN 1 ELSE 6 END, 
+										CHARINDEX(col14, col5) - CASE WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO', 'VESPA') THEN 1 ELSE 6 END)))
+								ELSE NULL
+							END AS Modelo,
+							col4,
+							CASE 
+								WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO') AND CHARINDEX('MY''', col5) > 0 THEN 
+									'20' + SUBSTRING(col5, CHARINDEX('MY''', col5) + 3, 2)
+								WHEN col1 IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO') AND CHARINDEX('MY', col5) > 0 THEN 
+									'20' + SUBSTRING(col5, CHARINDEX('MY', col5) + 2, 2)
+								WHEN col1 = 'VESPA' AND CHARINDEX('LATAM', col5) > 0 THEN 
+									'20' + SUBSTRING(col5, CHARINDEX('LATAM', col5) + 6, 2)
+								WHEN col1 NOT IN ('APRILIA', 'MOTO GUZZI', 'PIAGGIO', 'VESPA') THEN 
+									LEFT(col5, 4)
+								ELSE NULL
+							END AS ModeloAnio,
+							col5,
+							col8,
+							col10,
+							REPLACE(
+								REPLACE(
+									LTRIM(RTRIM(col14)),
+									' US', ''
+								),
+								CASE 
+									WHEN LEFT(col14, 8) IN ('LatAm 22', 'LatAm 23', 'LatAm 24', 'LatAm 25', 'LatAm 26') 
+										THEN LEFT(col14, 8) + ' '
+									ELSE ''
+								END,
+								''
+							) AS Color,
+							TRY_CAST(col20 AS DECIMAL(18,2)),
+							col19,
+							col11,
+							GETDATE()
+						FROM sta.mx_stock
+
+
+END;
+
