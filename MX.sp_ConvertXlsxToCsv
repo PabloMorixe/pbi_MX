@@ -1,0 +1,21 @@
+USE [Tableros]
+GO
+/****** Object:  StoredProcedure [dwdmx].[sp_ConvertXlsxToCsv]    Script Date: 11/7/2025 19:51:19 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+-- 2) Crear o alterar el SP que ejecute tu .ps1
+ALTER PROCEDURE [dwdmx].[sp_ConvertXlsxToCsv]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    -- Comando a ejecutar en PowerShell
+    DECLARE @cmd VARCHAR(8000) = 
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\Temp\Mexico\xlsx_to_CSV_v2.ps1"';
+
+    -- Lanza el script
+    EXEC xp_cmdshell @cmd;
+END;
