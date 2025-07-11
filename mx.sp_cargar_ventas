@@ -1,0 +1,129 @@
+USE [Tableros]
+GO
+/****** Object:  StoredProcedure [dwdmx].[sp_cargar_ventas]    Script Date: 11/7/2025 19:48:41 ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+
+ALTER PROCEDURE [dwdmx].[sp_cargar_ventas]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    --------------------------------------------------
+    -- 1) STAGING RAW: limpio y cargo CSV pipe-delimited
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_ventas','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_ventas;
+    CREATE TABLE sta.mx_cargar_ventas (
+        Col1  VARCHAR(MAX),  -- PVNumero / fcNumero
+        Col2  VARCHAR(MAX),  -- Fecha como número Excel
+        Col3  VARCHAR(MAX),
+        Col4  VARCHAR(MAX),
+        Col5  VARCHAR(MAX),  -- ClienteNombre
+        Col6  VARCHAR(MAX),
+        Col7  VARCHAR(MAX),  -- Importe1
+        Col8  VARCHAR(MAX),
+        Col9  VARCHAR(MAX)   -- Importe2
+    );
+
+    BULK INSERT sta.mx_cargar_ventas
+    FROM 'C:\Temp\Mexico\Input-Reportes\2-ventas.csv'
+    WITH (
+      FIELDTERMINATOR = '|',
+      ROWTERMINATOR   = '\n',
+      FIRSTROW        = 2,
+      CODEPAGE        = 'apn'
+    );
+
+    --------------------------------------------------
+    -- 2) STAGING CLEAN: quito BOM + comillas sobrantes
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_ventas_clean','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_ventas_clean;
+    SELECT
+      REPLACE(Col1, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col1,
+      REPLACE(Col2, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col2,
+      REPLACE(Col5, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col5,
+      REPLACE(Col7, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col7,
+      REPLACE(Col9, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col9
+    INTO sta.mx_cargar_ventas_clean
+    FROM sta.mx_cargar_ventas;
+
+    --------------------------------------------------
+    -- 3) STAGING QUALITY: convierto tipos y filtro filas válidas
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_ventas_calidad','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_ventas_calidad;
+    SELECT
+      Col1                                                        AS PVNumero,
+      Col5                                                        AS ClienteNombre,
+      -- aquí convertimos el número de serie de Excel a DATETIME
+      CAST(TRY_CAST(Col2 AS FLOAT) AS DATETIME)                    AS Fecha,
+      -- importes a decimal
+      TRY_CAST(REPLACE(Col7, ',', '.') AS DECIMAL(18,2))          AS Importe1,
+      TRY_CAST(REPLACE(Col9, ',', '.') AS DECIMAL(18,2))          AS Importe2
+    INTO sta.mx_cargar_ventas_calidad
+    FROM sta.mx_cargar_ventas_clean
+    WHERE TRY_CAST(Col2 AS FLOAT) IS NOT NULL;  -- sólo filas con fecha numérica válida
+
+    --------------------------------------------------
+    -- 4) TABLA FINAL: la recreo
+    --------------------------------------------------
+    IF OBJECT_ID('DWDmx.Ventas','U') IS NOT NULL
+        DROP TABLE DWDmx.Ventas;
+    CREATE TABLE DWDmx.Ventas (
+        ID              INT IDENTITY(1,1) PRIMARY KEY,
+        PVNumero        NVARCHAR(50),
+        Fecha           DATETIME,
+        mesaño          AS CONCAT(YEAR(Fecha), '-', RIGHT('0'+CONVERT(VARCHAR(2),MONTH(Fecha)),2)),
+        ClienteNombre   NVARCHAR(100),
+        sucursalNombre  NVARCHAR(100) DEFAULT 'SIN COBRANZAS',
+        fcNumero        VARCHAR(30),
+        importe         DECIMAL(18,2),
+        modelo          VARCHAR(120),
+        FechaCarga      DATETIME DEFAULT GETDATE()
+    );
+
+    --------------------------------------------------
+    -- 5) CTE última sucursal por preventa
+    --------------------------------------------------
+    ;WITH UltimaSucursal AS (
+        SELECT 
+          c.preventa,
+          c.sucursalNombre,
+          ROW_NUMBER() OVER (PARTITION BY c.preventa ORDER BY c.Fecha DESC) AS rn
+        FROM DWDmx.Cobranzas c
+    )
+
+    --------------------------------------------------
+    -- 6) INSERT FINAL: agrupo por PVNumero y cargo datos
+    --------------------------------------------------
+    INSERT INTO DWDmx.Ventas (
+      PVNumero, Fecha, ClienteNombre, sucursalNombre,
+      fcNumero, importe, modelo
+    )
+    SELECT
+      v.PVNumero,
+      ISNULL(MAX(v.Fecha), GETDATE())                                                 AS Fecha,
+      MAX(v.ClienteNombre)                                                             AS ClienteNombre,
+      ISNULL((
+        SELECT us.sucursalNombre
+        FROM UltimaSucursal us
+        WHERE us.preventa = v.PVNumero
+          AND us.rn = 1
+      ), 'SIN COBRANZAS')                                                               AS sucursalNombre,
+      v.PVNumero                                                                       AS fcNumero,
+      SUM(
+        COALESCE(v.Importe1,0)
+        + COALESCE(v.Importe2,0)
+      )                                                                                 AS importe,
+      ISNULL(MAX(i.Modelo), '')                                                         AS modelo
+    FROM sta.mx_cargar_ventas_calidad v
+    LEFT JOIN dwdmx.Inventario i
+      ON i.Referencia = v.PVNumero
+    GROUP BY v.PVNumero
+    HAVING COUNT(*) > 0;
+
+END;
