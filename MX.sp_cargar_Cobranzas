@@ -1,6 +1,6 @@
 USE [Tableros]
 GO
-/****** Object:  StoredProcedure [dwdmx].[sp_cargar_Cobranzas]    Script Date: 11/7/2025 19:50:23 ******/
+/****** Object:  StoredProcedure [dwdmx].[sp_cargar_Cobranzas]    Script Date: 5/8/2025 20:34:32 ******/
 SET ANSI_NULLS ON
 GO
 SET QUOTED_IDENTIFIER ON
