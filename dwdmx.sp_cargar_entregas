@@ -1,0 +1,88 @@
+USE [Tableros]
+GO
+
+/****** Object:  StoredProcedure [dwdmx].[sp_cargar_entregas]    Script Date: 24/11/2025 13:26:02 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE PROCEDURE [dwdmx].[sp_cargar_entregas]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    --------------------------------------------------
+    -- 1) STAGING RAW: limpio y cargo CSV pipe-delimited
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_entregas','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_entregas;
+    CREATE TABLE sta.mx_cargar_entregas (
+        Col1  VARCHAR(MAX),  -- preventa
+        Col2  VARCHAR(MAX),  -- fecha entrega
+      
+    );
+
+    BULK INSERT sta.mx_cargar_entregas
+    FROM 'C:\Temp\Mexico\Input-Reportes\4-entregas.csv'
+    WITH (
+      FIELDTERMINATOR = '|',
+      ROWTERMINATOR   = '\n',
+      FIRSTROW        = 2,
+      CODEPAGE        = 'apn'
+    );
+
+    --------------------------------------------------
+    -- 2) STAGING CLEAN: quito BOM + comillas sobrantes
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_entregas_clean','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_entregas_clean;
+    SELECT
+      REPLACE(Col1, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col1,
+      REPLACE(Col2, CHAR(239)+CHAR(187)+CHAR(191), '') AS Col2
+     
+    INTO sta.mx_cargar_entregas_clean
+    FROM sta.mx_cargar_entregas;
+
+    --------------------------------------------------
+    -- 3) STAGING QUALITY: convierto tipos y filtro filas válidas
+    --------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_entregas_calidad','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_entregas_calidad;
+    SELECT
+      Col1                                                        AS PVNumero,
+      Col2                                                        AS FechaEntrega
+     
+    INTO sta.mx_cargar_entregas_calidad
+    FROM sta.mx_cargar_entregas_clean
+   -- WHERE TRY_CAST(Col2 AS datetime) IS NOT NULL;  -- sólo filas con fecha numérica válida
+
+    --------------------------------------------------
+    -- 4) TABLA FINAL: la recreo
+    --------------------------------------------------
+    IF OBJECT_ID('DWDmx.Entregas','U') IS NOT NULL
+        DROP TABLE DWDmx.Entregas;
+    CREATE TABLE DWDmx.Entregas (
+        ID              INT IDENTITY(1,1) PRIMARY KEY,
+        PVNumero        NVARCHAR(50),
+        FechaEntrega           DATETIME,      
+        FechaCarga      DATETIME DEFAULT GETDATE()
+    );
+
+  
+
+    --------------------------------------------------
+    -- 6) INSERT FINAL: 
+    --------------------------------------------------
+    INSERT INTO DWDmx.Entregas (
+      PVNumero, FechaEntrega
+    )
+  select * from sta.mx_cargar_entregas_calidad
+
+END;
+
+
+GO
+
