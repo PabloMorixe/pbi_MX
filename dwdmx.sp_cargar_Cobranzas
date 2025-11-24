@@ -1,0 +1,110 @@
+USE [Tableros]
+GO
+
+/****** Object:  StoredProcedure [dwdmx].[sp_cargar_Cobranzas]    Script Date: 24/11/2025 13:25:26 ******/
+SET ANSI_NULLS ON
+GO
+
+SET QUOTED_IDENTIFIER ON
+GO
+
+
+CREATE PROCEDURE [dwdmx].[sp_cargar_Cobranzas]
+AS
+BEGIN
+    SET NOCOUNT ON;
+
+    ------------------------------------------------------------
+    -- 1) STAGING: limpiar tabla temporal y cargar CSV
+    ------------------------------------------------------------
+    IF OBJECT_ID('sta.mx_cargar_Cobranzas','U') IS NOT NULL
+        DROP TABLE sta.mx_cargar_Cobranzas;
+
+    CREATE TABLE sta.mx_cargar_Cobranzas (
+        Col1  NVARCHAR(MAX),  -- NoConc
+        Col2  NVARCHAR(MAX),  -- Concepto
+        Col3  NVARCHAR(MAX),  -- Cliente
+        Col4  NVARCHAR(MAX),  -- noVend
+        Col5  NVARCHAR(MAX),  -- Nombre
+        Col6  NVARCHAR(MAX),  -- Referencia
+        Col7  NVARCHAR(MAX),  -- Fecha
+        Col8  NVARCHAR(MAX),  -- DocPago
+        Col9  NVARCHAR(MAX),  -- DocFecha
+        Col10 NVARCHAR(MAX),  -- Días
+        Col11 NVARCHAR(MAX),  -- Importe
+        Col12 NVARCHAR(MAX),  -- Mone
+        Col13 NVARCHAR(MAX),  -- NoSucu
+        Col14 NVARCHAR(MAX),  -- Sucursal
+        Col15 NVARCHAR(MAX),  -- NoUsua
+        Col16 NVARCHAR(MAX)   -- Usuario
+    );
+
+    BULK INSERT sta.mx_cargar_Cobranzas
+    FROM 'C:\Temp\Mexico\Input-Reportes\2-cobranzas.csv'
+    WITH (
+        FIELDTERMINATOR = '|',
+        ROWTERMINATOR   = '\n',
+        FIRSTROW        = 7,
+        CODEPAGE        = 'ACP',
+        TABLOCK
+    );
+
+    ------------------------------------------------------------
+    -- 2) DESTINO: crear tabla final sin límite de tamaño (sin truncamiento)
+    ------------------------------------------------------------
+    IF OBJECT_ID('dwdmx.Cobranzas','U') IS NOT NULL
+        DROP TABLE dwdmx.Cobranzas;
+
+    CREATE TABLE dwdmx.Cobranzas (
+        ID              INT IDENTITY(1,1) PRIMARY KEY,
+        NoConc          NVARCHAR(MAX),
+        Concepto        NVARCHAR(MAX),
+        ClienteCodigo   NVARCHAR(MAX),
+        ClienteNombre   NVARCHAR(MAX),
+        Referencia      NVARCHAR(MAX),
+        Fecha           DATE,
+        DocPago         NVARCHAR(MAX),
+        DocFecha        DATE,
+        Dias            INT,
+        Importe         DECIMAL(18,2),
+        Moneda          NVARCHAR(MAX),
+        NoSucursal      NVARCHAR(MAX),
+        SucursalNombre  NVARCHAR(MAX),
+        UsuarioCodigo   NVARCHAR(MAX),
+        UsuarioNombre   NVARCHAR(MAX),
+        FechaCarga      DATETIME DEFAULT GETDATE()
+    );
+
+    ------------------------------------------------------------
+    -- 3) INSERT FINAL (con conversión segura)
+    ------------------------------------------------------------
+    INSERT INTO dwdmx.Cobranzas (
+        NoConc, Concepto, ClienteCodigo, ClienteNombre, Referencia,
+        Fecha, DocPago, DocFecha, Dias, Importe,
+        Moneda, NoSucursal, SucursalNombre, UsuarioCodigo, UsuarioNombre
+    )
+    SELECT
+        LTRIM(RTRIM(Col1))                              AS NoConc,
+        LTRIM(RTRIM(Col2))                              AS Concepto,
+        LTRIM(RTRIM(Col3))                              AS ClienteCodigo,
+        LTRIM(RTRIM(Col5))                              AS ClienteNombre,
+        LTRIM(RTRIM(Col6))                              AS Referencia,
+        TRY_CONVERT(DATE, Col7, 103)                    AS Fecha,           -- dd/mm/yyyy
+        LTRIM(RTRIM(Col8))                              AS DocPago,
+        TRY_CONVERT(DATE, Col9, 103)                    AS DocFecha,
+        TRY_CAST(Col10 AS INT)                          AS Dias,
+        TRY_CAST(REPLACE(Col11, ',', '.') AS DECIMAL(18,2)) AS Importe,
+        LTRIM(RTRIM(Col12))                             AS Moneda,
+        LTRIM(RTRIM(Col13))                             AS NoSucursal,
+        LTRIM(RTRIM(Col14))                             AS SucursalNombre,
+        LTRIM(RTRIM(Col15))                             AS UsuarioCodigo,
+        LTRIM(RTRIM(Col16))                             AS UsuarioNombre
+    FROM sta.mx_cargar_Cobranzas
+    WHERE TRY_CONVERT(DATE, Col7, 103) IS NOT NULL;   -- solo filas válidas
+
+    PRINT '✅ Cobranzas cargadas correctamente. Filas insertadas: '
+        + CAST(@@ROWCOUNT AS NVARCHAR(10));
+
+END;
+GO
+
